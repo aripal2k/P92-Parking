@@ -1,0 +1,73 @@
+{
+  "currency": "AUD",
+  "default_rates": {
+    "base_rate_per_hour": 0.0,
+    "peak_hour_surcharge_rate": 0.0,
+    "weekend_surcharge_rate": 0.0,
+    "public_holiday_surcharge_rate": 0.0
+  },
+  "destinations": {
+    "Westfield Sydney": {
+      "base_rate_per_hour": 6.0,
+      "peak_hour_surcharge_rate": 0.2,
+      "weekend_surcharge_rate": 0.5,
+      "public_holiday_surcharge_rate": 0.8
+    },
+    "Westfield Bondi Junction": {
+      "base_rate_per_hour": 7.0,
+      "peak_hour_surcharge_rate": 0.7,
+      "weekend_surcharge_rate": 0.5,
+      "public_holiday_surcharge_rate": 1.2
+    },
+    "Westfield Parramatta": {
+      "base_rate_per_hour": 5.5,
+      "peak_hour_surcharge_rate": 0.5,
+      "weekend_surcharge_rate": 0.3,
+      "public_holiday_surcharge_rate": 0.8
+    },
+    "Westfield Chatswood": {
+      "base_rate_per_hour": 6.5,
+      "peak_hour_surcharge_rate": 0.6,
+      "weekend_surcharge_rate": 0.4,
+      "public_holiday_surcharge_rate": 0.9
+    },
+    "Westfield Sydney (Example)": {
+      "base_rate_per_hour": 6.0,
+      "peak_hour_surcharge_rate": 0.2,
+      "weekend_surcharge_rate": 0.5,
+      "public_holiday_surcharge_rate": 0.8
+    }
+  },
+  "peak_hours": {
+    "weekday": {
+      "morning": {
+        "start": "07:00",
+        "end": "09:00"
+      },
+      "evening": {
+        "start": "17:00",
+        "end": "19:00"
+      }
+    }
+  },
+  "public_holidays": [
+    "2024-01-01",
+    "2024-01-26",
+    "2024-03-29",
+    "2024-04-01",
+    "2024-04-25",
+    "2024-06-10",
+    "2024-10-07",
+    "2024-12-25",
+    "2024-12-26",
+    "2025-01-01",
+    "2025-01-27",
+    "2025-04-18",
+    "2025-04-21",
+    "2025-04-25",
+    "2025-06-09",
+    "2025-10-06",
+    "2025-12-25",
+    "2025-12-26"
+  ]
+}

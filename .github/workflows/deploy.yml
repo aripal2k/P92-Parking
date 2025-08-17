@@ -1,0 +1,201 @@
+name: Deploy to AWS EC2
+
+# Trigger deployment when pushing to main branch or manual trigger
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Backend/**'
+      - 'Frontend/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checkout code
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Step 2: Deploy to EC2
+    - name: Deploy to EC2 instance
+      env:
+        HOST: ${{ secrets.EC2_HOST }}
+        USERNAME: ${{ secrets.EC2_USERNAME }}
+        KEY: ${{ secrets.EC2_SSH_KEY }}
+      run: |
+        # Create SSH directory
+        mkdir -p ~/.ssh
+
+        # Save SSH key to file
+        echo "$KEY" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+
+        # Add server to known hosts (avoid connection prompt)
+        ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null
+
+        # SSH connect and execute deployment commands
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USERNAME@$HOST 'bash -s' << 'EOF'
+        echo "========== Starting deployment =========="
+
+        # Navigate to project directory
+        cd ~/capstone-project-25t2-3900-t16a-cherry || { echo "Error: Project directory not found"; exit 1; }
+
+        # Pull latest code
+        echo "Pulling latest code..."
+        git pull origin main || { echo "Error: Git pull failed"; exit 1; }
+
+        # Navigate to backend directory
+        cd Backend || { echo "Error: Backend directory not found"; exit 1; }
+
+        # Stop current running containers
+        echo "Stopping current services..."
+        docker-compose down
+
+        # Rebuild and start services
+        echo "Building and starting new services..."
+        docker-compose up -d --build
+
+        # Wait for services to start
+        echo "Waiting for services to start..."
+        sleep 30
+
+        # Check service status
+        echo "Checking service status..."
+        docker ps
+
+        # Test health check endpoint with retries
+        echo "Testing API health..."
+        for i in {1..5}; do
+          if curl -f http://localhost:8000/api/health; then
+            echo "API health check passed!"
+            break
+          else
+            echo "Health check attempt $i failed, retrying in 10 seconds..."
+            sleep 10
+          fi
+        done
+
+        echo "========== Backend deployment completed! =========="
+
+        # Frontend deployment
+        echo "========== Starting frontend deployment =========="
+
+        # Navigate to frontend directory
+        cd ~/capstone-project-25t2-3900-t16a-cherry/Frontend/autospot || { echo "Error: Frontend directory not found"; exit 1; }
+
+        # Setup Flutter PATH
+        export PATH="$PATH:$HOME/flutter/bin"
+
+        # Install Flutter if not already installed
+        if ! command -v flutter &> /dev/null; then
+          echo "Installing Flutter..."
+          cd ~
+          if [ ! -d "flutter" ]; then
+            git clone https://github.com/flutter/flutter.git -b stable
+          fi
+          # Add to bashrc for future sessions if not already there
+          if ! grep -q "flutter/bin" ~/.bashrc; then
+            echo 'export PATH="$PATH:$HOME/flutter/bin"' >> ~/.bashrc
+          fi
+        fi
+
+        # Preconfigure Flutter
+        $HOME/flutter/bin/flutter config --enable-web
+        $HOME/flutter/bin/flutter precache --web
+
+        # Navigate back to frontend directory
+        cd ~/capstone-project-25t2-3900-t16a-cherry/Frontend/autospot
+
+        # Clean Flutter build cache to ensure fresh build
+        echo "Cleaning Flutter build cache..."
+        $HOME/flutter/bin/flutter clean
+        rm -rf .dart_tool build
+
+        # Ensure production configuration
+        echo "Setting production configuration..."
+        sed -i 's/static const bool useLocalHost = true/static const bool useLocalHost = false/g' lib/config/api_config.dart
+
+        # Build Flutter web app
+        echo "Building Flutter web app..."
+        $HOME/flutter/bin/flutter pub get
+        $HOME/flutter/bin/flutter build web --release --base-href / --no-tree-shake-icons
+
+        # Create web directory and copy files
+        echo "Deploying web files..."
+        sudo mkdir -p /var/www/autospot
+        sudo cp -r build/web/* /var/www/autospot/
+        sudo chown -R www-data:www-data /var/www/autospot
+
+        # Install Nginx if not already done
+        if ! command -v nginx &> /dev/null; then
+          echo "Installing Nginx..."
+          sudo apt-get update
+          sudo apt-get install -y nginx
+        fi
+
+        # Configure Nginx for AutoSpot
+        echo "Configuring Nginx..."
+        
+        # Always use HTTPS configuration since we have SSL certificates
+        echo "Configuring Nginx with HTTPS..."
+        sudo rm -f /etc/nginx/sites-available/autospot
+        
+        # HTTP redirect to HTTPS
+        echo "server {" | sudo tee /etc/nginx/sites-available/autospot
+        echo "    listen 80;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    server_name autospot.it.com www.autospot.it.com api.autospot.it.com;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    return 301 https://\$server_name\$request_uri;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "}" | sudo tee -a /etc/nginx/sites-available/autospot
+        
+        # Main website HTTPS
+        echo "server {" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    listen 443 ssl http2;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    server_name autospot.it.com www.autospot.it.com;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    ssl_certificate /etc/letsencrypt/live/autospot.it.com/fullchain.pem;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    ssl_certificate_key /etc/letsencrypt/live/autospot.it.com/privkey.pem;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    root /var/www/autospot;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    index index.html;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    location / { try_files \$uri \$uri/ /index.html; }" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "}" | sudo tee -a /etc/nginx/sites-available/autospot
+        
+        # API subdomain HTTPS
+        echo "server {" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    listen 443 ssl http2;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    server_name api.autospot.it.com;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    ssl_certificate /etc/letsencrypt/live/autospot.it.com/fullchain.pem;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    ssl_certificate_key /etc/letsencrypt/live/autospot.it.com/privkey.pem;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    location / {" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "        proxy_pass http://localhost:8000;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "        proxy_set_header Host \$host;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "        proxy_set_header X-Real-IP \$remote_addr;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "        proxy_set_header X-Forwarded-Proto \$scheme;" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "    }" | sudo tee -a /etc/nginx/sites-available/autospot
+        echo "}" | sudo tee -a /etc/nginx/sites-available/autospot
+
+        # Enable the site
+        sudo ln -sf /etc/nginx/sites-available/autospot /etc/nginx/sites-enabled/
+        sudo rm -f /etc/nginx/sites-enabled/default
+
+        # Test and reload nginx
+        sudo nginx -t && sudo systemctl reload nginx
+
+        echo "========== Full deployment completed! =========="
+        EOF
+
+    # Step 3: Success notification
+    - name: Send success notification
+      if: success()
+      run: |
+        echo "Deployment successful!"
+        echo "API URL: http://${{ secrets.EC2_HOST }}:8000"
+        echo "Docs URL: http://${{ secrets.EC2_HOST }}:8000/docs"
+
+    # Step 4: Failure notification
+    - name: Send failure notification
+      if: failure()
+      run: |
+        echo "Deployment failed! Please check the logs."

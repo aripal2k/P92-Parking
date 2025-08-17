@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flutter Coverage Report Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .summary {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .coverage-bar {
+            background-color: #e0e0e0;
+            height: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 5px 0;
+        }
+        .coverage-fill {
+            height: 100%;
+            background-color: #4caf50;
+            transition: width 0.3s ease;
+        }
+        .file-list {
+            margin-top: 20px;
+        }
+        .file-item {
+            border-bottom: 1px solid #eee;
+            padding: 10px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-name {
+            flex: 1;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .coverage-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .coverage-percent {
+            font-weight: bold;
+            min-width: 60px;
+            text-align: right;
+        }
+        .coverage-low { color: #f44336; }
+        .coverage-medium { color: #ff9800; }
+        .coverage-high { color: #4caf50; }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 5px;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+        .upload-area:hover {
+            background-color: #f0f0f0;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .filter-buttons {
+            margin: 10px 0;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 0 5px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #2196f3;
+            color: white;
+        }
+        button:hover {
+            background-color: #1976d2;
+        }
+        button.active {
+            background-color: #4caf50;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Flutter Coverage Report Viewer</h1>
+        
+        <div class="upload-area" id="uploadArea">
+            <p>Click here or drag and drop your lcov.info file</p>
+            <p style="font-size: 12px; color: #666;">Located at: Frontend/autospot/coverage/lcov.info</p>
+            <input type="file" id="fileInput" accept=".info">
+        </div>
+        
+        <div id="reportContainer" style="display: none;">
+            <div class="summary">
+                <h2>Coverage Summary</h2>
+                <div class="stats" id="stats"></div>
+                <div class="coverage-bar">
+                    <div class="coverage-fill" id="coverageBar"></div>
+                </div>
+                <p id="summaryText"></p>
+            </div>
+            
+            <div class="filter-buttons">
+                <button onclick="filterFiles('all')" class="active">All Files</button>
+                <button onclick="filterFiles('user')">User Screens</button>
+                <button onclick="filterFiles('operator')">Operator Screens</button>
+                <button onclick="filterFiles('low')">Low Coverage (< 30%)</button>
+                <button onclick="filterFiles('medium')">Medium Coverage (30-70%)</button>
+                <button onclick="filterFiles('high')">High Coverage (> 70%)</button>
+            </div>
+            
+            <div class="file-list" id="fileList"></div>
+        </div>
+    </div>
+    
+    <script>
+        let coverageData = {};
+        let currentFilter = 'all';
+        
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.backgroundColor = '#e8f5e9';
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.backgroundColor = '';
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.backgroundColor = '';
+            const file = e.dataTransfer.files[0];
+            if (file) processFile(file);
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) processFile(file);
+        });
+        
+        function processFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const content = e.target.result;
+                parseLcovInfo(content);
+                displayReport();
+            };
+            reader.readAsText(file);
+        }
+        
+        function parseLcovInfo(content) {
+            const lines = content.split('\n');
+            let currentFile = '';
+            coverageData = {};
+            
+            lines.forEach(line => {
+                if (line.startsWith('SF:')) {
+                    currentFile = line.substring(3).replace(/\\/g, '/');
+                    coverageData[currentFile] = { total: 0, covered: 0, lines: {} };
+                } else if (line.startsWith('DA:')) {
+                    const [lineNum, count] = line.substring(3).split(',').map(Number);
+                    coverageData[currentFile].total++;
+                    if (count > 0) {
+                        coverageData[currentFile].covered++;
+                    }
+                    coverageData[currentFile].lines[lineNum] = count;
+                }
+            });
+        }
+        
+        function displayReport() {
+            document.getElementById('uploadArea').style.display = 'none';
+            document.getElementById('reportContainer').style.display = 'block';
+            
+            updateStats();
+            filterFiles('all');
+        }
+        
+        function updateStats() {
+            let totalLines = 0;
+            let coveredLines = 0;
+            let fileCount = 0;
+            let userFiles = 0;
+            let operatorFiles = 0;
+            
+            Object.entries(coverageData).forEach(([file, data]) => {
+                if (data.total > 0) {
+                    fileCount++;
+                    totalLines += data.total;
+                    coveredLines += data.covered;
+                    
+                    if (file.includes('/user/')) userFiles++;
+                    if (file.includes('/operator/')) operatorFiles++;
+                }
+            });
+            
+            const overallCoverage = totalLines > 0 ? (coveredLines / totalLines * 100).toFixed(1) : 0;
+            
+            document.getElementById('stats').innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${overallCoverage}%</div>
+                    <div class="stat-label">Overall Coverage</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${fileCount}</div>
+                    <div class="stat-label">Total Files</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${coveredLines}/${totalLines}</div>
+                    <div class="stat-label">Lines Covered</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${userFiles + operatorFiles}</div>
+                    <div class="stat-label">Screen Files</div>
+                </div>
+            `;
+            
+            document.getElementById('coverageBar').style.width = overallCoverage + '%';
+            document.getElementById('summaryText').textContent = 
+                `Total: ${totalLines} lines | Covered: ${coveredLines} lines | Files: ${fileCount}`;
+        }
+        
+        function filterFiles(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-buttons button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            const fileList = document.getElementById('fileList');
+            fileList.innerHTML = '';
+            
+            const filteredFiles = Object.entries(coverageData)
+                .filter(([file, data]) => {
+                    if (data.total === 0) return false;
+                    const coverage = (data.covered / data.total * 100);
+                    
+                    switch(filter) {
+                        case 'user': return file.includes('/user/');
+                        case 'operator': return file.includes('/operator/');
+                        case 'low': return coverage < 30;
+                        case 'medium': return coverage >= 30 && coverage <= 70;
+                        case 'high': return coverage > 70;
+                        default: return true;
+                    }
+                })
+                .sort((a, b) => {
+                    const coverageA = a[1].covered / a[1].total;
+                    const coverageB = b[1].covered / b[1].total;
+                    return coverageA - coverageB;
+                });
+            
+            filteredFiles.forEach(([file, data]) => {
+                const coverage = (data.covered / data.total * 100).toFixed(1);
+                const fileName = file.split('/').pop();
+                const coverageClass = coverage < 30 ? 'coverage-low' : 
+                                    coverage < 70 ? 'coverage-medium' : 'coverage-high';
+                
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <div class="file-name" title="${file}">${fileName}</div>
+                    <div class="coverage-info">
+                        <div class="coverage-bar" style="width: 100px;">
+                            <div class="coverage-fill" style="width: ${coverage}%"></div>
+                        </div>
+                        <span class="coverage-percent ${coverageClass}">${coverage}%</span>
+                        <span style="color: #666; font-size: 12px;">${data.covered}/${data.total}</span>
+                    </div>
+                `;
+                fileList.appendChild(fileItem);
+            });
+        }
+    </script>
+</body>
+</html>

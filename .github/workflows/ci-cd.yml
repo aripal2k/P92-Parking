@@ -1,0 +1,164 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.10'
+  FLUTTER_VERSION: '3.32.5'
+
+jobs:
+  # Backend CI
+  backend:
+    name: Backend Tests & Style
+    runs-on: ubuntu-latest
+    
+    services:
+      mongodb:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        cd Backend
+        pip install -r requirements.txt
+        pip install black flake8
+    
+    - name: Run Black formatter check
+      continue-on-error: true
+      run: |
+        cd Backend
+        black --check . || echo "::warning::Black formatting check failed. Please run 'black .' to format your code."
+    
+    - name: Run Flake8 linter
+      continue-on-error: true
+      run: |
+        cd Backend
+        flake8 . --count --select=E9,F63,F7,F82 --show-source || echo "::warning::Flake8 linter check found issues. Please review and fix the reported problems."
+    
+    - name: Run tests
+      env:
+        MONGODB_URI: mongodb://localhost:27017/test
+        REDIS_URL: redis://localhost:6379
+        JWT_SECRET_KEY: test_key
+        TESTING: true
+      run: |
+        cd Backend
+        cp .env.example .env
+        pytest -v --cov=app
+
+  # Frontend CI
+  frontend:
+    name: Frontend Tests & Style
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+    
+    - name: Disable Flutter analytics
+      run: flutter config --no-analytics
+    
+    - name: Install dependencies
+      run: |
+        cd Frontend/autospot
+        flutter pub get
+    
+    - name: Analyze code
+      run: |
+        cd Frontend/autospot
+        flutter analyze --no-fatal-infos --no-fatal-warnings || true
+    
+    - name: Check formatting
+      run: |
+        cd Frontend/autospot
+        dart format --output=none --set-exit-if-changed . || echo "Format check failed but continuing"
+    
+    - name: Run tests
+      run: |
+        cd Frontend/autospot
+        flutter test
+    
+    - name: Build web (for deploy)
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        cd Frontend/autospot
+        flutter build web --release
+
+  # Deploy to AWS
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to EC2
+      env:
+        HOST: ${{ secrets.EC2_HOST }}
+        USERNAME: ${{ secrets.EC2_USERNAME }}
+        KEY: ${{ secrets.EC2_SSH_KEY }}
+      run: |
+        mkdir -p ~/.ssh
+        echo "$KEY" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null
+        
+        ssh -i ~/.ssh/deploy_key $USERNAME@$HOST 'bash -s' << 'EOF'
+        echo "Starting deployment..."
+        
+        # Update code
+        cd ~/capstone-project-25t2-3900-t16a-cherry
+        git pull origin main
+        
+        # Deploy Backend
+        cd Backend
+        docker-compose down
+        docker-compose up -d --build
+        
+        # Wait for services
+        sleep 30
+        
+        # Health check
+        curl -f http://localhost:8000/api/health || exit 1
+        
+        # Deploy Frontend
+        cd ../Frontend/autospot
+        export PATH="$PATH:$HOME/flutter/bin"
+        
+        # Clean and build
+        flutter clean
+        flutter pub get
+        flutter build web --release
+        
+        # Deploy to nginx
+        sudo rm -rf /var/www/autospot/*
+        sudo cp -r build/web/* /var/www/autospot/
+        sudo chown -R www-data:www-data /var/www/autospot
+        sudo nginx -t && sudo systemctl reload nginx
+        
+        echo "Deployment completed!"
+        EOF
